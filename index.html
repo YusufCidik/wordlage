@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="tr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#16332a"><title>Kelime Çorbası</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<style>
+:root{--bg:#e6eee4;--ink:#16332a;--soft:#4b6a5d;--card:#f7faf5;--acc:#e0a100;--line:#c5d5c6;--bad:#b3402f}
+@media(prefers-color-scheme:dark){:root{--bg:#0f211b;--ink:#e3efe4;--soft:#93b3a2;--card:#183229;--acc:#f0b90b;--line:#2c4a3d;--bad:#e2705f}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+main,nav{max-width:480px;margin:0 auto;padding:16px 18px}nav{display:flex;gap:6px;padding-bottom:0}
+h1{font-size:26px;margin:6px 0}p{line-height:1.5}.soft{color:var(--soft)}
+.card{background:var(--card);border:1.5px solid var(--line);border-radius:18px;padding:22px 18px;margin:14px 0;text-align:center}
+.w{font-size:36px;font-weight:800}.tr{font-size:20px;font-weight:600;color:var(--acc)}.ex{font-style:italic;color:var(--soft)}
+.row{display:flex;gap:10px}button,input,select{font:inherit;padding:13px;border-radius:14px;border:1.5px solid var(--line);background:var(--card);color:var(--ink)}
+button{flex:1;font-weight:600;cursor:pointer}button.p{background:var(--acc);color:#2a1f00;border-color:var(--acc)}input{width:100%;margin:6px 0}
+.bar{height:10px;border-radius:9px;background:var(--line);overflow:hidden}.bar i{display:block;height:100%;background:var(--acc)}
+.tag{display:inline-block;background:var(--line);border-radius:9px;padding:3px 10px;margin:3px;font-size:13px}
+a{color:var(--soft);cursor:pointer;text-decoration:underline;font-size:14px}.err{color:var(--bad)}
+</style></head><body>
+<nav id="nav" hidden></nav><main id="app"></main>
+<script>
+// ====== AYAR: Supabase > Project Settings > API ======
+const SUPABASE_URL = "https://xxdpxvdlfdwsbdjbztkg.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_DjFlhCHGr3cXY_TLa9jGmA_tJs0cpgU";
+// =====================================================
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = id => document.getElementById(id), app = $("app");
+const esc = t => String(t ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const D = [1,3,7,14,30], LV = ["A1","A2","B1","B2","C1","C2"];
+let me, lvl = "B2", Q = [], qi = 0, shown = false, R = null;
+
+const say = w => { try { const u = new SpeechSynthesisUtterance(w); u.lang = "en-US"; speechSynthesis.speak(u) } catch {} };
+const load = t => app.innerHTML = `<p class="soft">${t}</p>`;
+const fail = e => app.insertAdjacentHTML("beforeend", `<p class="err">${esc(e.message || e)}</p>`);
+async function ai(body) {
+  const { data, error } = await sb.functions.invoke("ai", { body });
+  if (error) throw new Error("Yapay zeka hatası. Edge Function ve GROQ_API_KEY kurulu mu?");
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+async function init() {
+  const { data: { session } } = await sb.auth.getSession();
+  session ? start(session.user) : authView();
+}
+function authView(m = "") {
+  $("nav").hidden = true;
+  app.innerHTML = `<h1>Kelime Çorbası</h1><p class="soft">Giriş yap veya kayıt ol.</p>
+  <input id="em" type="email" placeholder="E-posta" autocomplete="email">
+  <input id="pw" type="password" placeholder="Şifre (en az 6 karakter)" autocomplete="current-password">
+  <div class="row" style="margin-top:8px"><button onclick="auth(0)">Giriş</button><button class="p" onclick="auth(1)">Kayıt ol</button></div><p class="err">${esc(m)}</p>`;
+}
+async function auth(up) {
+  const c = { email: $("em").value.trim(), password: $("pw").value };
+  const { data, error } = up ? await sb.auth.signUp(c) : await sb.auth.signInWithPassword(c);
+  if (error) return authView(error.message);
+  if (!data.session) return authView("E-postandaki bağlantıyı onayla, sonra giriş yap.");
+  start(data.user);
+}
+async function start(u) {
+  me = u;
+  await sb.from("profiles").upsert({ id: u.id }, { onConflict: "id", ignoreDuplicates: true });
+  const { data } = await sb.from("profiles").select("level").eq("id", u.id).single();
+  lvl = data?.level || "B2";
+  $("nav").hidden = false;
+  $("nav").innerHTML = [["today","Bugün"],["dict","Sözlük"],["stat","Çorba"]].map(([k,t]) => `<button data-t="${k}" onclick="go('${k}')">${t}</button>`).join("");
+  go("today");
+}
+function go(t) {
+  document.querySelectorAll("#nav button").forEach(b => b.className = b.dataset.t == t ? "p" : "");
+  ({ today, dict, stat })[t]();
+}
+
+// ---------- Bugün ----------
+async function today() {
+  load("Kelimeler hazırlanıyor...");
+  const { data: due, error } = await sb.from("user_words").select("box, words(*)").lte("due", new Date().toISOString()).order("due").limit(4);
+  if (error) return fail(error);
+  const { data: fresh, error: e2 } = await sb.rpc("fresh_words", { lvl, n: 10 - due.length });
+  if (e2) return fail(e2);
+  Q = [...due.map(r => ({ ...r.words, box: r.box })), ...fresh.map(w => ({ ...w, box: 0 }))];
+  qi = 0; shown = false; card();
+}
+function card() {
+  if (!Q.length) return app.innerHTML = `<h1>Havuz boş</h1><p class="soft">Çorba sekmesinden kelime üret.</p>`;
+  if (qi >= Q.length) return app.innerHTML = `<h1>Bugünün çorbası hazır</h1><p class="soft">${Q.length} kelime tamamlandı. Yenilemek için Bugün sekmesine tekrar dokun.</p>`;
+  const x = Q[qi];
+  app.innerHTML = `<div class="bar"><i style="width:${qi / Q.length * 100}%"></i></div>
+  <div class="card"><div class="w">${esc(x.word)} <a onclick="say('${esc(x.word)}')">🔊</a></div><span class="soft">${esc(x.pos || "")} ${esc(x.cefr || "")}</span>
+  ${shown ? `<p class="tr">${esc(x.tr)}</p><p class="ex">${esc(x.example || "")}</p>` : `<p class="soft">Önce anlamını tahmin et</p>`}</div>
+  ${shown ? `<div class="row"><button onclick="rate(0)">Bilmiyordum</button><button class="p" onclick="rate(1)">Biliyordum</button></div>`
+          : `<button class="p" style="width:100%" onclick="shown=true;card()">Anlamı göster</button>`}`;
+}
+async function rate(ok) {
+  const x = Q[qi], box = ok ? Math.min(x.box + 1, 4) : 0;
+  const due = new Date(Date.now() + (ok ? D[box] : 0.5) * 864e5).toISOString();
+  const { error } = await sb.from("user_words").upsert({ user_id: me.id, word_id: x.id, box, due });
+  if (error) return fail(error);
+  qi++; shown = false; card();
+}
+
+// ---------- Sözlük + RAG ----------
+function dict() {
+  R = null;
+  app.innerHTML = `<h1>Sözlük</h1><input id="q" placeholder="Kelime veya ifade" autocapitalize="none">
+  <div class="row"><button class="p" onclick="lookup()">Ara</button></div><div id="res"></div>`;
+}
+async function lookup() {
+  const q = $("q").value.trim().toLowerCase(), r = $("res"); if (!q) return;
+  r.innerHTML = `<p class="soft">Aranıyor...</p>`;
+  try {
+    const { data } = await sb.from("words").select("*").ilike("word", q + "%").limit(3);
+    let h = (data || []).map(x => `<div class="card"><b>${esc(x.word)}</b> <span class="soft">${esc(x.cefr || "")}</span><br>${esc(x.tr)}<br><span class="ex">${esc(x.example || "")}</span></div>`).join("");
+    r.innerHTML = h + `<p class="soft">Yapay zeka aranıyor...</p>`;
+    R = await ai({ mode: "define", q });
+    const { data: sim } = await sb.rpc("match_words", { q: R.embedding, n: 6 });
+    r.innerHTML = h + `<div class="card"><div class="w">${esc(R.w)} <a onclick="say('${esc(R.w)}')">🔊</a></div><span class="soft">${esc(R.pos)} ${esc(R.cefr)}</span>
+    <p class="tr">${esc(R.tr)}</p><p>${(R.syn || []).map(s => `<span class="tag">${esc(s)}</span>`).join("")}</p>${(R.ex || []).map(s => `<p class="ex">${esc(s)}</p>`).join("")}
+    ${sim?.length ? `<p class="soft">Havuzdaki benzer kelimeler:</p>${sim.filter(s => s.word != R.w).map(s => `<span class="tag" title="${esc(s.tr)}">${esc(s.word)} · ${esc(s.tr)}</span>`).join("")}` : ""}</div>
+    <button class="p" style="width:100%" onclick="addWord()">Çorbama ekle</button>`;
+  } catch (e) { r.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+async function addWord() {
+  const { data, error } = await sb.from("words").upsert({ word: R.w.toLowerCase(), pos: R.pos, cefr: R.cefr, tr: R.tr, example: (R.ex || [])[0], embedding: R.embedding }, { onConflict: "word" }).select("id").single();
+  if (error) return fail(error);
+  await sb.from("user_words").upsert({ user_id: me.id, word_id: data.id, box: 0, due: new Date().toISOString() });
+  $("res").insertAdjacentHTML("beforeend", `<p class="tr">Eklendi.</p>`);
+}
+
+// ---------- Çorba (istatistik + havuz üretimi) ----------
+async function stat() {
+  load("Yükleniyor...");
+  const c = q => q.then(r => r.count ?? 0);
+  const [pool, seen, known] = await Promise.all([
+    c(sb.from("words").select("*", { count: "exact", head: true })),
+    c(sb.from("user_words").select("*", { count: "exact", head: true })),
+    c(sb.from("user_words").select("*", { count: "exact", head: true }).gt("box", 0))]);
+  app.innerHTML = `<h1>Çorban</h1><div class="card"><div class="w">${known}</div><p class="soft">öğrenilen kelime · ${seen} görülen · havuz ${pool}</p></div>
+  <p>Seviyen: <select id="lv" onchange="setLv(this.value)">${LV.map(l => `<option ${l == lvl ? "selected" : ""}>${l}</option>`).join("")}</select></p>
+  <div class="card" style="text-align:left"><b>Havuzu büyüt</b><p class="soft">Seçili seviyede yapay zeka kelime üretir ve anlamsal olarak indeksler. Bir tıkta 10 tur (~250 kelime).</p>
+  <div class="row"><select id="gl">${LV.map(l => `<option ${l == "B2" ? "selected" : ""}>${l}</option>`).join("")}</select><button class="p" onclick="gen()">Üret</button></div><div id="gs"></div></div>
+  <a onclick="sb.auth.signOut().then(authView)">Çıkış yap</a>`;
+}
+async function setLv(v) { lvl = v; await sb.from("profiles").update({ level: v }).eq("id", me.id); }
+async function gen() {
+  const l = $("gl").value, g = $("gs"); let tot = 0;
+  for (let i = 1; i <= 10; i++) {
+    g.innerHTML = `<p class="soft">Tur ${i}/10 · eklenen ${tot}</p>`;
+    try { tot += (await ai({ mode: "gen", level: l, n: 25 })).added; } catch (e) { g.innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  }
+  g.innerHTML = `<p class="tr">${tot} yeni kelime eklendi.</p>`;
+}
+init();
+</script></body></html>
